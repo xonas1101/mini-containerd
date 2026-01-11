@@ -1,0 +1,31 @@
+{
+  "ociVersion": "1.0.2",
+
+  "process": {
+    "terminal": true,
+    "user": {
+      "uid": 0,
+      "gid": 0
+    },
+    "args": ["/bin/sh"],
+    "env": [
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    ],
+    "cwd": "/"
+  },
+
+  "root": {
+    "path": "rootfs",
+    "readonly": false
+  },
+
+  "hostname": "runc_container",
+
+  "linux": {
+    "namespaces": [
+      { "type": "uts" },
+      { "type": "mount" },
+      { "type": "pid" }
+    ]
+  }
+}
