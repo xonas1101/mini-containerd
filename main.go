@@ -10,17 +10,37 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
+
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
-func main() {
-	// We expect a subcommand: either "run" or "child"
-	if len(os.Args) < 2 {
-		panic("need subcommand: run|child")
+func loadSpec(bundle string) *specs.Spec {
+	data, err := os.ReadFile(filepath.Join(bundle, "config.json"))
+	if err != nil {
+		panic(err)
 	}
+
+	var spec specs.Spec
+	if err := json.Unmarshal(data, &spec); err != nil {
+		panic(err)
+	}
+	return &spec
+}
+
+
+func main() {
+	// We expect a bundle to run containers
+	if len(os.Args) < 3 {
+		panic("missing bundle path")
+	}
+
 
 	switch os.Args[1] {
 
@@ -43,104 +63,163 @@ func main() {
 }
 
 func run() {
-	// This is the "parent" process.
-	// It will create new namespaces and then re-exec itself as "child".
-	fmt.Printf("Running %v as %d\n", os.Args[2:], os.Getpid())
+	bundle := os.Args[2]
 
-	// Re-execute THIS binary, but with subcommand "child"
-	// /proc/self/exe points to the currently running executable
-	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, os.Args[2:]...)...)
+	spec := loadSpec(bundle)
 
-	// Hook stdio so the container feels interactive
+	cmd := exec.Command(
+		"/proc/self/exe",
+		"child",
+		bundle,
+	)
+
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 
-	// Tell the kernel to create new namespaces for the child:
-	// - UTS: hostname/domain isolation
-	// - NS:  mount namespace
-	// - PID: process tree isolation
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags:   syscall.CLONE_NEWUTS | syscall.CLONE_NEWNS | syscall.CLONE_NEWPID,
-		Unshareflags: syscall.CLONE_NEWNS,
+		Cloneflags: namespaceFlags(spec),
 	}
 
-	// Run the child process in the new namespaces
 	if err := cmd.Run(); err != nil {
-		fmt.Printf("run failed: %v\n", err)
-		os.Exit(1)
+		panic(err)
 	}
 }
 
-func child() {
-	// This process is now inside new namespaces
-	fmt.Printf("Running %v as %d\n", os.Args[2:], os.Getpid())
+func namespaceFlags(spec *specs.Spec) uintptr {
+	var flags uintptr
+	for _, ns := range spec.Linux.Namespaces {
+		switch ns.Type {
+		case specs.PIDNamespace:
+			flags |= syscall.CLONE_NEWPID
+		case specs.UTSNamespace:
+			flags |= syscall.CLONE_NEWUTS
+		case specs.MountNamespace:
+			flags |= syscall.CLONE_NEWNS
+		}
+	}
+	return flags
+}
 
-	// The actual command that the user wants to run in the container
-	cmd := exec.Command(os.Args[2], os.Args[3:]...)
+func child() {
+	if len(os.Args) < 3 {
+		panic("child requires bundle path")
+	}
+
+	bundle := os.Args[2]
+	spec := loadSpec(bundle)
+
+	// Hostname (OCI)
+	if spec.Hostname != "" {
+		if err := syscall.Sethostname([]byte(spec.Hostname)); err != nil {
+			panic(err)
+		}
+	}
+
+	// Root filesystem (bundle-relative)
+	rootfs := filepath.Join(bundle, spec.Root.Path)
+// If OCI root is readonly, remount rootfs as read-only
+	if spec.Root.Readonly {
+		if err := syscall.Mount(
+			rootfs,
+			rootfs,
+			"",
+			syscall.MS_BIND|syscall.MS_REC,
+			"",
+		); err != nil {
+			panic(err)
+		}
+
+		if err := syscall.Mount(
+			rootfs,
+			rootfs,
+			"",
+			syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_RDONLY,
+			"",
+		); err != nil {
+			panic(err)
+		}
+	}
+
+	if err := pivotRoot(rootfs); err != nil {
+		panic(err)
+	}
+
+	_ = os.Remove("/dev/ptmx")
+	if err := os.Symlink("pts/ptmx", "/dev/ptmx"); err != nil {
+		panic(err)
+	}
+
+	// OCI process
+	proc := spec.Process
+	cmd := exec.Command(proc.Args[0], proc.Args[1:]...)
+	cmd.Env = proc.Env
+	cmd.Dir = proc.Cwd
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 
-	// ----------------------------
-	// 1. Set container hostname
-	// ----------------------------
-	if err := syscall.Sethostname([]byte("runc_container")); err != nil {
-		fmt.Println("sethostname failed:", err)
-		os.Exit(1)
+	if err := syscall.Setgid(int(proc.User.GID)); err != nil {
+		panic(err)
 	}
 
-	// ----------------------------
-	// 2. Change root filesystem
-	// ----------------------------
-	// This makes /home/akaxonas/rootfs appear as /
-	// for processes inside the container.
-	if err := syscall.Chroot("/home/akaxonas/rootfs"); err != nil {
-		fmt.Println("chroot failed:", err)
-		os.Exit(1)
+	if err := syscall.Setuid(int(proc.User.UID)); err != nil {
+		panic(err)
 	}
 
-	// After chroot, ensure working directory is inside new root
-	if err := os.Chdir("/"); err != nil {
-		fmt.Println("chdir failed:", err)
-		os.Exit(1)
-	}
+	// PID 1 reaping
+	go func() {
+		for {
+			var status syscall.WaitStatus
+			syscall.Wait4(-1, &status, 0, nil)
+		}
+	}()
 
-	// ----------------------------
-	// 3. Mount virtual filesystems
-	// ----------------------------
-
-	// Mount /proc so tools like ps, top, etc work
-	_ = os.MkdirAll("/proc", 0755)
-	if err := syscall.Mount("proc", "/proc", "proc", 0, ""); err != nil {
-		fmt.Println("mount proc failed:", err)
-		os.Exit(1)
-	}
-
-	// Mount /sys so kernel information is available
-	_ = os.MkdirAll("/sys", 0755)
-	if err := syscall.Mount("sysfs", "/sys", "sysfs", 0, ""); err != nil {
-		fmt.Println("mount sysfs failed:", err)
-		// not fatal — container can still run
-	}
-
-	// Mount cgroup v2 filesystem for resource control
-	_ = os.MkdirAll("/sys/fs/cgroup", 0755)
-	if err := syscall.Mount("cgroup2", "/sys/fs/cgroup", "cgroup2", 0, ""); err != nil {
-		// Some systems already mount it or disallow remounting
-		// Safe to ignore in this minimal runtime
-	}
-
-	// ----------------------------
-	// 4. Execute user command
-	// ----------------------------
 	if err := cmd.Run(); err != nil {
-		fmt.Println("child exec failed:", err)
-		os.Exit(1)
+		panic(err)
+	}
+}
+
+func pivotRoot(rootfs string) error {
+	if err := syscall.Mount(rootfs, rootfs, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+		return err
 	}
 
-	// ----------------------------
-	// 5. Cleanup mounts
-	// ----------------------------
-	_ = syscall.Unmount("/proc", 0)
-	_ = syscall.Unmount("/sys/fs/cgroup", 0)
-	_ = syscall.Unmount("/sys", 0)
+	// Respect OCI root.readonly
+	if err := syscall.Mount(
+		rootfs,
+		rootfs,
+		"",
+		syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_RDONLY,
+		"",
+	); err != nil {
+		return err
+	}
+
+	putOld := filepath.Join(rootfs, ".oldroot")
+
+	if err := syscall.Unmount(putOld, syscall.MNT_DETACH); err != nil {
+		return err
+	}
+
+	return os.RemoveAll(putOld)
+}
+
+func mountAll(spec *specs.Spec) error {
+	for _, m := range spec.Mounts {
+		if err := os.MkdirAll(m.Destination, 0755); err != nil {
+			return err
+		}
+
+		data := strings.Join(m.Options, ",")
+
+		if err := syscall.Mount(
+			m.Source,
+			m.Destination,
+			m.Type,
+			0,
+			data,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // -------------------------------------------------

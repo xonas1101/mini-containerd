@@ -2,7 +2,7 @@
   "ociVersion": "1.0.2",
 
   "process": {
-    "terminal": true,
+    "terminal": false,
     "user": {
       "uid": 0,
       "gid": 0
@@ -20,6 +20,27 @@
   },
 
   "hostname": "runc_container",
+  
+  "mounts": [
+    {
+      "destination": "/proc",
+      "type": "proc",
+      "source": "proc",
+      "options": ["nosuid", "noexec", "nodev"]
+    },
+    {
+      "destination": "/dev",
+      "type": "tmpfs",
+      "source": "tmpfs",
+      "options": ["nosuid", "strictatime", "mode=755", "size=65536k"]
+    },
+    {
+      "destination": "/dev/pts",
+      "type": "devpts",
+      "source": "devpts",
+      "options": ["nosuid", "noexec", "newinstance", "ptmxmode=0666", "mode=0620"]
+    }
+  ],
 
   "linux": {
     "namespaces": [
