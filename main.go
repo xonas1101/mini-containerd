@@ -34,13 +34,11 @@ func loadSpec(bundle string) *specs.Spec {
 	return &spec
 }
 
-
 func main() {
 	// We expect a bundle to run containers
 	if len(os.Args) < 3 {
 		panic("missing bundle path")
 	}
-
 
 	switch os.Args[1] {
 
@@ -116,7 +114,7 @@ func child() {
 
 	// Root filesystem (bundle-relative)
 	rootfs := filepath.Join(bundle, spec.Root.Path)
-// If OCI root is readonly, remount rootfs as read-only
+	// If OCI root is readonly, remount rootfs as read-only
 	if spec.Root.Readonly {
 		if err := syscall.Mount(
 			rootfs,
@@ -138,11 +136,15 @@ func child() {
 			panic(err)
 		}
 	}
-
+	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
+		panic(err)
+	}
 	if err := pivotRoot(rootfs); err != nil {
 		panic(err)
 	}
-
+	if err := mountAll(spec); err != nil {
+		panic(err)
+	}
 	_ = os.Remove("/dev/ptmx")
 	if err := os.Symlink("pts/ptmx", "/dev/ptmx"); err != nil {
 		panic(err)
@@ -167,7 +169,11 @@ func child() {
 	go func() {
 		for {
 			var status syscall.WaitStatus
-			syscall.Wait4(-1, &status, 0, nil)
+			_, err := syscall.Wait4(-1, &status, 0, nil)
+			if err != nil {
+				// No more children → exit loop
+				return
+			}
 		}
 	}()
 
@@ -177,23 +183,29 @@ func child() {
 }
 
 func pivotRoot(rootfs string) error {
+	// Make sure rootfs is a mount point
 	if err := syscall.Mount(rootfs, rootfs, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
 		return err
 	}
 
-	// Respect OCI root.readonly
-	if err := syscall.Mount(
-		rootfs,
-		rootfs,
-		"",
-		syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_RDONLY,
-		"",
-	); err != nil {
+	putOld := filepath.Join(rootfs, ".oldroot")
+	if err := os.MkdirAll(putOld, 0700); err != nil {
 		return err
 	}
 
-	putOld := filepath.Join(rootfs, ".oldroot")
+	// Actual pivot_root syscall
+	if err := syscall.PivotRoot(rootfs, putOld); err != nil {
+		return err
+	}
 
+	// Change working dir to new root
+	if err := os.Chdir("/"); err != nil {
+		return err
+	}
+
+	putOld = "/.oldroot"
+
+	// Unmount old root
 	if err := syscall.Unmount(putOld, syscall.MNT_DETACH); err != nil {
 		return err
 	}
@@ -203,20 +215,38 @@ func pivotRoot(rootfs string) error {
 
 func mountAll(spec *specs.Spec) error {
 	for _, m := range spec.Mounts {
-		if err := os.MkdirAll(m.Destination, 0755); err != nil {
+		dest := m.Destination
+
+		if err := os.MkdirAll(dest, 0755); err != nil {
 			return err
 		}
 
-		data := strings.Join(m.Options, ",")
+		var flags uintptr
+		var data []string
+
+		for _, opt := range m.Options {
+			switch opt {
+			case "nosuid":
+				flags |= syscall.MS_NOSUID
+			case "noexec":
+				flags |= syscall.MS_NOEXEC
+			case "nodev":
+				flags |= syscall.MS_NODEV
+			default:
+				data = append(data, opt)
+			}
+		}
+
+		dataStr := strings.Join(data, ",")
 
 		if err := syscall.Mount(
 			m.Source,
-			m.Destination,
+			dest,
 			m.Type,
-			0,
-			data,
+			flags,
+			dataStr,
 		); err != nil {
-			return err
+			return fmt.Errorf("mount %s failed: %v", dest, err)
 		}
 	}
 	return nil
