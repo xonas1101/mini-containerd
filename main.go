@@ -39,9 +39,7 @@ func main() {
 	if len(os.Args) < 3 {
 		panic("missing bundle path")
 	}
-
 	switch os.Args[1] {
-
 	case "run":
 		// If we are running under systemd, we may need delegation
 		// so that cgroup controllers can be used correctly.
