@@ -140,6 +140,9 @@ func child() {
 	if err := pivotRoot(rootfs); err != nil {
 		panic(err)
 	}
+	if err := setupDevices(); err != nil {
+		panic(err)
+	}
 	if err := mountAll(spec); err != nil {
 		panic(err)
 	}
@@ -246,6 +249,30 @@ func mountAll(spec *specs.Spec) error {
 		); err != nil {
 			return fmt.Errorf("mount %s failed: %v", dest, err)
 		}
+	}
+	return nil
+}
+
+func setupDevices() error {
+	error err := syscall.Mknod("/dev/null", syscall.S_IFCHR|0666, int((1<<8)|3))
+	if err != nil {
+		return err
+	}
+	err = syscall.Mknod("/dev/zero", syscall.S_IFCHR|0666, int((1<<8)|5))
+	if err != nil {
+		return err
+	}
+	err = syscall.Mknod("/dev/random", syscall.S_IFCHR|0666, int((1<<8)|8))
+	if err != nil {
+		return err
+	}
+	err = syscall.Mknod("/dev/urandom", syscall.S_IFCHR|0666, int((1<<8)|9))
+	if err != nil {
+		return err
+	}
+	err = syscall.Mknod("/dev/tty", syscall.S_IFCHR|0666, int((5<<8)|0))
+	if err != nil {
+		return err
 	}
 	return nil
 }
