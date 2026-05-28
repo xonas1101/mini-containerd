@@ -4,14 +4,17 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/thanhpk/randstr"
 )
 
+const containersRoot = "/var/lib/mini-containerd/containers"
+
 type Container struct {
 	ID        string    `json:"id"`
-	Status    string    `json:"status"` // "created", "running", "stopped", "exited"
+	Status    string    `json:"status"` // "created", "running", "exited"
 	PID       int       `json:"pid"`
 	Image     string    `json:"image"`
 	Command   []string  `json:"command"`
@@ -30,17 +33,17 @@ func NewContainer(image string, command []string) *Container {
 	return c
 }
 
+func containerDir(id string) string {
+	return filepath.Join(containersRoot, id)
+}
+
 func writeNewContainerOnDisk(c *Container) error {
-	dir := "/var/lib/mini-docker/containers/" + c.ID
+	dir := containerDir(c.ID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Printf("failed to create container directory %s: %v", dir, err)
 		return err
 	}
-	if err := os.MkdirAll(dir+"/rootfs", 0755); err != nil {
-		log.Printf("failed to create rootfs directory for container %s: %v", c.ID, err)
-		return err
-	}
-	f, err := os.Create(dir + "/config.json")
+	f, err := os.Create(filepath.Join(dir, "config.json"))
 	if err != nil {
 		log.Printf("failed to create config.json for container %s: %v", c.ID, err)
 		return err
@@ -60,6 +63,6 @@ func (c *Container) StartContainer() {
 }
 
 func (c *Container) StopContainer() {
-	c.Status = "stopped"
-	log.Printf("container %s stopped", c.ID)
+	c.Status = "exited"
+	log.Printf("container %s exited", c.ID)
 }

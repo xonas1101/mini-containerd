@@ -78,12 +78,16 @@ func run(bundle string) {
 
 	spec := loadSpec(bundle)
 	
-	c := NewContainer(spec.Process.Args[0], spec.Process.Args[1:])
+	c := NewContainer(bundle, spec.Process.Args)
 	if err := writeNewContainerOnDisk(c); err != nil {
 		panic(err)
 	}
 
-	if err := cp.Copy(filepath.Join(bundle, spec.Root.Path), "/var/lib/mini-docker/containers/"+c.ID+"/rootfs"); err != nil {
+	rootfsDst := filepath.Join(containerDir(c.ID), "rootfs")
+	if err := os.MkdirAll(rootfsDst, 0755); err != nil {
+		panic(err)
+	}
+	if err := cp.Copy(filepath.Join(bundle, spec.Root.Path), rootfsDst); err != nil {
 		panic(err)
 	}
 
@@ -109,14 +113,16 @@ func run(bundle string) {
 		panic(err)
 	}
 
-	if err := cmd.Wait(); err != nil {
-		panic(err)
-	}
-
+	waitErr := cmd.Wait()
 	c.StopContainer()
-	c.ExitCode = cmd.ProcessState.ExitCode()
+	if cmd.ProcessState != nil {
+		c.ExitCode = cmd.ProcessState.ExitCode()
+	}
 	if err := writeNewContainerOnDisk(c); err != nil {
 		panic(err)
+	}
+	if waitErr != nil {
+		panic(waitErr)
 	}
 }
 
