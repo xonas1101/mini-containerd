@@ -128,4 +128,3 @@ Some of my other educational projects:
 
 Early prototype, but functional.  
 Still actively improving and adding features.
-This is a working demo of containerd container runtime
