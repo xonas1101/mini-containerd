@@ -143,6 +143,9 @@ func child() {
 	if err := mountAll(spec); err != nil {
 		panic(err)
 	}
+	if err := setupDevices(); err != nil {
+		panic(err)
+	}
 	_ = os.Remove("/dev/ptmx")
 	if err := os.Symlink("pts/ptmx", "/dev/ptmx"); err != nil {
 		panic(err)
@@ -245,6 +248,46 @@ func mountAll(spec *specs.Spec) error {
 			dataStr,
 		); err != nil {
 			return fmt.Errorf("mount %s failed: %v", dest, err)
+		}
+	}
+	return nil
+}
+
+func ensureCharDevice(path string, mode uint32, dev int) error {
+	if err := syscall.Mknod(path, mode, dev); err == nil {
+		return nil
+	} else if err != syscall.EEXIST {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if ok && info.Mode()&os.ModeCharDevice != 0 && uint64(stat.Rdev) == uint64(dev) {
+		return nil
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("remove existing %s: %w", path, err)
+	}
+	return syscall.Mknod(path, mode, dev)
+}
+
+func setupDevices() error {
+	devices := []struct {
+		path  string
+		major uint32
+		minor uint32
+	}{
+		{"/dev/null", 1, 3},
+		{"/dev/zero", 1, 5},
+		{"/dev/random", 1, 8},
+		{"/dev/urandom", 1, 9},
+		{"/dev/tty", 5, 0},
+	}
+	for _, d := range devices {
+		if err := ensureCharDevice(d.path, syscall.S_IFCHR|0666, int(d.major<<8|d.minor)); err != nil {
+			return fmt.Errorf("setup %s: %w", d.path, err)
 		}
 	}
 	return nil
