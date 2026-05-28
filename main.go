@@ -10,6 +10,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"syscall"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/urfave/cli/v3"
 )
 
 func loadSpec(bundle string) *specs.Spec {
@@ -35,31 +37,43 @@ func loadSpec(bundle string) *specs.Spec {
 }
 
 func main() {
-	// We expect a bundle to run containers
-	if len(os.Args) < 3 {
-		panic("missing bundle path")
-	}
-	switch os.Args[1] {
-	case "run":
-		// If we are running under systemd, we may need delegation
-		// so that cgroup controllers can be used correctly.
-		if needDelegate() {
-			reexecInDelegate(20)
-			return
-		}
-		run()
-
-	case "child":
-		// This is the process that actually runs *inside* the container
+	// child is an internal subcommand spawned by run() via /proc/self/exe — not user-facing
+	if len(os.Args) > 1 && os.Args[1] == "child" {
 		child()
+		return
+	}
 
-	default:
-		panic("wrong command")
+	app := &cli.Command{
+		Name:  "mini-containerd",
+		Usage: "a minimal container runtime",
+		Commands: []*cli.Command{
+			{
+				Name:      "run",
+				Usage:     "run a container from a bundle",
+				ArgsUsage: "<bundle>",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					bundle := cmd.Args().First()
+					if bundle == "" {
+						return fmt.Errorf("bundle path required")
+					}
+					if needDelegate() {
+						reexecInDelegate(20)
+						return nil
+					}
+					run(bundle)
+					return nil
+				},
+			},
+		},
+	}
+
+	if err := app.Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 }
 
-func run() {
-	bundle := os.Args[2]
+func run(bundle string) {
 
 	spec := loadSpec(bundle)
 
