@@ -140,10 +140,10 @@ func child() {
 	if err := pivotRoot(rootfs); err != nil {
 		panic(err)
 	}
-	if err := setupDevices(); err != nil {
+	if err := mountAll(spec); err != nil {
 		panic(err)
 	}
-	if err := mountAll(spec); err != nil {
+	if err := setupDevices(); err != nil {
 		panic(err)
 	}
 	_ = os.Remove("/dev/ptmx")
@@ -254,23 +254,23 @@ func mountAll(spec *specs.Spec) error {
 }
 
 func setupDevices() error {
-	error err := syscall.Mknod("/dev/null", syscall.S_IFCHR|0666, int((1<<8)|3))
+	err := syscall.Mknod("/dev/null", syscall.S_IFCHR|0666, (1, 3))
 	if err != nil {
 		return err
 	}
-	err = syscall.Mknod("/dev/zero", syscall.S_IFCHR|0666, int((1<<8)|5))
+	err = syscall.Mknod("/dev/zero", syscall.S_IFCHR|0666, (1, 5))
 	if err != nil {
 		return err
 	}
-	err = syscall.Mknod("/dev/random", syscall.S_IFCHR|0666, int((1<<8)|8))
+	err = syscall.Mknod("/dev/random", syscall.S_IFCHR|0666, (1, 8))
 	if err != nil {
 		return err
 	}
-	err = syscall.Mknod("/dev/urandom", syscall.S_IFCHR|0666, int((1<<8)|9))
+	err = syscall.Mknod("/dev/urandom", syscall.S_IFCHR|0666, (1, 9))
 	if err != nil {
 		return err
 	}
-	err = syscall.Mknod("/dev/tty", syscall.S_IFCHR|0666, int((5<<8)|0))
+	err = syscall.Mknod("/dev/tty", syscall.S_IFCHR|0666, (5, 0))
 	if err != nil {
 		return err
 	}
