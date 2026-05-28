@@ -21,6 +21,7 @@ import (
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/urfave/cli/v3"
+	cp "github.com/otiai10/copy"
 )
 
 func loadSpec(bundle string) *specs.Spec {
@@ -76,6 +77,15 @@ func main() {
 func run(bundle string) {
 
 	spec := loadSpec(bundle)
+	
+	c := NewContainer(spec.Process.Args[0], spec.Process.Args[1:])
+	if err := writeNewContainerOnDisk(c); err != nil {
+		panic(err)
+	}
+
+	if err := cp.Copy(filepath.Join(bundle, spec.Root.Path), "/var/lib/mini-docker/containers/"+c.ID+"/rootfs"); err != nil {
+		panic(err)
+	}
 
 	cmd := exec.Command(
 		"/proc/self/exe",
@@ -89,7 +99,23 @@ func run(bundle string) {
 		Cloneflags: namespaceFlags(spec),
 	}
 
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		panic(err)
+	}
+
+	c.PID = cmd.Process.Pid
+	c.StartContainer()
+	if err := writeNewContainerOnDisk(c); err != nil {
+		panic(err)
+	}
+
+	if err := cmd.Wait(); err != nil {
+		panic(err)
+	}
+
+	c.StopContainer()
+	c.ExitCode = cmd.ProcessState.ExitCode()
+	if err := writeNewContainerOnDisk(c); err != nil {
 		panic(err)
 	}
 }
@@ -191,7 +217,7 @@ func child() {
 			}
 		}
 	}()
-
+	
 	if err := cmd.Run(); err != nil {
 		panic(err)
 	}
