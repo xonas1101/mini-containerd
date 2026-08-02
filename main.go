@@ -209,6 +209,8 @@ func namespaceFlags(spec *specs.Spec) uintptr {
 			flags |= syscall.CLONE_NEWUTS
 		case specs.MountNamespace:
 			flags |= syscall.CLONE_NEWNS
+		case specs.NetworkNamespace:
+			flags |= syscall.CLONE_NEWNET
 		}
 	}
 	return flags
@@ -261,6 +263,9 @@ func child() {
 		panic(err)
 	}
 	if err := mountAll(spec); err != nil {
+		panic(err)
+	}
+	if err := setupNetwork(); err != nil {
 		panic(err)
 	}
 	if err := setupDevices(); err != nil {
@@ -391,6 +396,16 @@ func ensureCharDevice(path string, mode uint32, dev int) error {
 		return fmt.Errorf("remove existing %s: %w", path, err)
 	}
 	return syscall.Mknod(path, mode, dev)
+}
+
+// setupNetwork brings up the loopback interface inside a fresh network
+// namespace. Containers get only "lo" by default — no host interfaces,
+// no external connectivity. Bridge/veth networking is left for later.
+func setupNetwork() error {
+	if _, err := exec.LookPath("ip"); err != nil {
+		return nil
+	}
+	return exec.Command("ip", "link", "set", "lo", "up").Run()
 }
 
 func setupDevices() error {

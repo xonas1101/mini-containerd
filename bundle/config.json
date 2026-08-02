@@ -40,7 +40,8 @@
     "namespaces": [
       { "type": "uts" },
       { "type": "mount" },
-      { "type": "pid" }
+      { "type": "pid" },
+      { "type": "network" }
     ]
   }
 }
