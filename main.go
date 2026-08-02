@@ -22,8 +22,8 @@ import (
 	"time"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/urfave/cli/v3"
 	cp "github.com/otiai10/copy"
+	"github.com/urfave/cli/v3"
 )
 
 func loadSpec(bundle string) (*specs.Spec, error) {

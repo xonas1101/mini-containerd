@@ -10,7 +10,7 @@ import (
 	"github.com/thanhpk/randstr"
 )
 
-const containersRoot = "/var/lib/mini-containerd/containers"
+var containersRoot = "/var/lib/mini-containerd/containers"
 
 // Status values: "created" -> "running" -> "stopped"/"exited". "stopped"
 // means an explicit stop/kill (restartable via StartContainer); "exited"

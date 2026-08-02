@@ -86,6 +86,23 @@ sudo ./mini-containerd run bundle
 
 ---
 
+## Testing
+
+Unit tests cover the pure-logic helpers that don't need root or real namespaces
+(image manifest read/write, tar path-traversal guards, volume/memory spec
+parsing, container state transitions). They don't exercise namespace/mount/
+cgroup behavior itself — that still needs manual testing as root, e.g. the
+`run --image=... --name=...` isolation check described above.
+
+```bash
+go test ./...
+```
+
+CI (`.github/workflows/ci.yml`) runs `go build`, `go vet`, and `go test` on
+every push and pull request.
+
+---
+
 ## Root filesystem
 
 This project currently uses a minimal BusyBox-based root filesystem.  
