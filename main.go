@@ -75,6 +75,10 @@ func main() {
 						Name:  "volume",
 						Usage: "bind mount host:container[:ro], repeatable",
 					},
+					&cli.BoolFlag{
+						Name:  "detach",
+						Usage: "run the container in the background",
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					bundle := cmd.Args().First()
@@ -90,6 +94,7 @@ func main() {
 						Image:   cmd.String("image"),
 						Name:    cmd.String("name"),
 						Memory:  cmd.String("memory"),
+						Detach:  cmd.Bool("detach"),
 						CPUs:    cmd.Float("cpus"),
 						Volumes: cmd.StringSlice("volume"),
 					})
@@ -154,6 +159,49 @@ func main() {
 					return ShowLogs(id, int(cmd.Int("tail")))
 				},
 			},
+			{
+				Name:      "start",
+				Usage:     "restart a stopped container",
+				ArgsUsage: "<container>",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					id := cmd.Args().First()
+					if id == "" {
+						return fmt.Errorf("container name required")
+					}
+					return StartContainer(id)
+				},
+			},
+			{
+				Name:      "stop",
+				Usage:     "gracefully stop a running container (SIGTERM, then SIGKILL after a timeout)",
+				ArgsUsage: "<container>",
+				Flags: []cli.Flag{
+					&cli.IntFlag{
+						Name:  "timeout",
+						Usage: "seconds to wait before SIGKILL",
+						Value: 10,
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					id := cmd.Args().First()
+					if id == "" {
+						return fmt.Errorf("container name required")
+					}
+					return StopContainer(id, time.Duration(cmd.Int("timeout"))*time.Second)
+				},
+			},
+			{
+				Name:      "kill",
+				Usage:     "immediately force-kill a running container (SIGKILL)",
+				ArgsUsage: "<container>",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					id := cmd.Args().First()
+					if id == "" {
+						return fmt.Errorf("container name required")
+					}
+					return KillContainer(id)
+				},
+			},
 		},
 	}
 
@@ -170,6 +218,7 @@ type RunOptions struct {
 	Memory  string
 	CPUs    float64
 	Volumes []string
+	Detach  bool
 }
 
 func run(opts RunOptions) {
@@ -196,6 +245,7 @@ func run(opts RunOptions) {
 	}
 
 	c := NewContainer(imageRef, spec.Process.Args)
+	c.Bundle = bundle
 	c.Volumes = opts.Volumes
 	if opts.Name != "" {
 		c.ID = opts.Name
@@ -217,6 +267,16 @@ func run(opts RunOptions) {
 		panic(err)
 	}
 
+	if err := launchChild(c, bundle, spec, opts.Memory, opts.CPUs, opts.Detach); err != nil {
+		panic(err)
+	}
+}
+
+// launchChild spawns the "/proc/self/exe child" process for c, applies
+// cgroup limits (if any), and either returns immediately (detach) or blocks
+// until the process exits, recording its status/exit code either way.
+// Shared by run() and StartContainer() (restarting a stopped container).
+func launchChild(c *Container, bundle string, spec *specs.Spec, memory string, cpus float64, detach bool) error {
 	cmd := exec.Command(
 		"/proc/self/exe",
 		"child",
@@ -231,35 +291,37 @@ func run(opts RunOptions) {
 	}
 
 	if err := cmd.Start(); err != nil {
-		panic(err)
+		return err
 	}
 
 	c.PID = cmd.Process.Pid
-	c.StartContainer()
+	c.markRunning()
 	if err := writeNewContainerOnDisk(c); err != nil {
-		panic(err)
+		return err
 	}
 
-	if opts.Memory != "" || opts.CPUs > 0 {
-		if err := SetupCgroup(c.ID, c.PID, opts.Memory, opts.CPUs); err != nil {
-			panic(err)
+	if memory != "" || cpus > 0 {
+		if err := SetupCgroup(c.ID, c.PID, memory, cpus); err != nil {
+			return err
 		}
 	}
 
+	if detach {
+		return nil
+	}
+
 	waitErr := cmd.Wait()
-	c.StopContainer()
+	c.markExited()
 	if cmd.ProcessState != nil {
 		c.ExitCode = cmd.ProcessState.ExitCode()
 	}
 	if err := writeNewContainerOnDisk(c); err != nil {
-		panic(err)
+		return err
 	}
 	if err := CleanupCgroup(c.ID); err != nil {
-		panic(err)
+		return err
 	}
-	if waitErr != nil {
-		panic(waitErr)
-	}
+	return waitErr
 }
 
 func namespaceFlags(spec *specs.Spec) uintptr {

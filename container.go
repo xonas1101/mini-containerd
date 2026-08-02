@@ -12,11 +12,15 @@ import (
 
 const containersRoot = "/var/lib/mini-containerd/containers"
 
+// Status values: "created" -> "running" -> "stopped"/"exited". "stopped"
+// means an explicit stop/kill (restartable via StartContainer); "exited"
+// means the process ended on its own (e.g. a foreground `run` finishing).
 type Container struct {
 	ID        string    `json:"id"`
-	Status    string    `json:"status"` // "created", "running", "exited"
+	Status    string    `json:"status"`
 	PID       int       `json:"pid"`
 	Image     string    `json:"image"`
+	Bundle    string    `json:"bundle"` // OCI bundle dir used to launch this container
 	Command   []string  `json:"command"`
 	CreatedAt time.Time `json:"created_at"`
 	ExitCode  int       `json:"exit_code"`
@@ -70,12 +74,12 @@ func readContainer(id string) (*Container, error) {
 	return &c, nil
 }
 
-func (c *Container) StartContainer() {
+func (c *Container) markRunning() {
 	c.Status = "running"
 	log.Printf("container %s started", c.ID)
 }
 
-func (c *Container) StopContainer() {
+func (c *Container) markExited() {
 	c.Status = "exited"
 	log.Printf("container %s exited", c.ID)
 }
