@@ -64,7 +64,7 @@ func main() {
 			{
 				Name:      "run",
 				Usage:     "run a container from a bundle",
-				ArgsUsage: "<bundle>",
+				ArgsUsage: "<bundle> [command] [args...]",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:  "image",
@@ -92,10 +92,12 @@ func main() {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					bundle := cmd.Args().First()
-					if bundle == "" {
+					args := cmd.Args().Slice()
+					if len(args) == 0 {
 						return fmt.Errorf("bundle path required")
 					}
+					bundle := args[0]
+					command := args[1:] // overrides the bundle's config.json process.args, if given
 					if cmd.IsSet("name") && cmd.String("name") == "" {
 						return fmt.Errorf("container name cannot be empty")
 					}
@@ -104,6 +106,7 @@ func main() {
 					}
 					return run(RunOptions{
 						Bundle:  bundle,
+						Command: command,
 						Image:   cmd.String("image"),
 						Name:    cmd.String("name"),
 						Memory:  cmd.String("memory"),
@@ -263,6 +266,7 @@ func main() {
 
 type RunOptions struct {
 	Bundle  string
+	Command []string // overrides the bundle's config.json process.args, if non-empty
 	Image   string
 	Name    string
 	Memory  string
@@ -297,7 +301,12 @@ func run(opts RunOptions) error {
 		}
 	}
 
-	c := NewContainer(imageRef, spec.Process.Args)
+	command := spec.Process.Args
+	if len(opts.Command) > 0 {
+		command = opts.Command
+	}
+
+	c := NewContainer(imageRef, command)
 	c.Bundle = bundle
 	c.Volumes = opts.Volumes
 	if opts.Name != "" {
@@ -473,9 +482,13 @@ func child() error {
 		return err
 	}
 
-	// OCI process
+	// OCI process. container.Command is the source of truth (defaults to
+	// spec.Process.Args, but may be overridden by trailing `run` args).
 	proc := spec.Process
-	cmd := exec.Command(proc.Args[0], proc.Args[1:]...)
+	if len(container.Command) == 0 {
+		return fmt.Errorf("container %q has no command to run", containerID)
+	}
+	cmd := exec.Command(container.Command[0], container.Command[1:]...)
 	cmd.Env = proc.Env
 	cmd.Dir = proc.Cwd
 	if container.Detach {

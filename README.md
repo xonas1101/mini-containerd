@@ -28,7 +28,7 @@ Running a container drops you into a shell that is isolated from the host’s pr
 ## Commands
 
 ```
-mini-containerd run [options] <bundle>       run a container from a bundle
+mini-containerd run [options] <bundle> [command] [args...]   run a container from a bundle
 mini-containerd load, import <name>          load an image from a tar/tar.gz rootfs bundle
 mini-containerd images                       list loaded images
 mini-containerd ps                           list containers
@@ -61,6 +61,12 @@ Run `mini-containerd <command> --help` for a command's full option list.
 ```sh
 sudo ./mini-containerd load --file=busybox-rootfs.tar.gz busybox
 sudo ./mini-containerd run --image=busybox --name=c1 bundle
+```
+
+Or override the command directly (no need to edit `config.json`):
+
+```sh
+sudo ./mini-containerd run --image=busybox --name=c1 bundle /bin/echo hello
 ```
 
 Inside the container:
@@ -96,19 +102,15 @@ like a Node.js app the same way you'd expect from Docker:
    the *entire* filesystem (libs included), so the resulting tarball is
    self-contained the same way BusyBox's is.
 
-2. **Load it:**
+2. **Load it and run with a command override:** trailing args after
+   `<bundle>` replace the bundle's `config.json` `process.args` for that
+   container — the same shape as `docker run <image> <cmd> [args...]`.
    ```bash
    sudo ./mini-containerd load --file=node.tar.gz node
-   sudo ./mini-containerd run --image=node --name=myapp bundle
+   sudo ./mini-containerd run --image=node --name=myapp bundle node server.js
    ```
-
-**Current limitation:** the command actually executed inside the container
-(`process.args` in `bundle/config.json`) is fixed — right now it's hardcoded
-to `/bin/sh`. There's no `--entrypoint`/trailing-command CLI flag yet (the
-way `docker run node:20 node server.js` lets you override the command), so
-to run something other than a shell today you'd edit `config.json`'s
-`process.args` directly. Command override is worth its own issue if you want
-that Docker-like ergonomics.
+   With no trailing command, `run` falls back to the bundle's `config.json`
+   `process.args` as before (e.g. `/bin/sh`).
 
 ---
 
@@ -212,8 +214,6 @@ This is still a work in progress. Some known limitations:
 - `logs` only has output for `--detach` runs; foreground runs pass the real
   terminal straight through instead (see #40) — a real pty would let both
   work together, not implemented yet
-- No `--entrypoint`/command-override flag — the executed command comes from
-  `bundle/config.json`'s `process.args`, not from the CLI
 
 ---
 
