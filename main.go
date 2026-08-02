@@ -62,6 +62,14 @@ func main() {
 						Name:  "name",
 						Usage: "container name (defaults to a random id)",
 					},
+					&cli.StringFlag{
+						Name:  "memory",
+						Usage: "memory limit, e.g. 256m, 1g (cgroup v2 memory.max)",
+					},
+					&cli.FloatFlag{
+						Name:  "cpus",
+						Usage: "cpu limit in cores, e.g. 0.5 (cgroup v2 cpu.max)",
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					bundle := cmd.Args().First()
@@ -72,7 +80,13 @@ func main() {
 						reexecInDelegate(20)
 						return nil
 					}
-					run(bundle, cmd.String("image"), cmd.String("name"))
+					run(RunOptions{
+						Bundle: bundle,
+						Image:  cmd.String("image"),
+						Name:   cmd.String("name"),
+						Memory: cmd.String("memory"),
+						CPUs:   cmd.Float("cpus"),
+					})
 					return nil
 				},
 			},
@@ -125,26 +139,34 @@ func main() {
 	}
 }
 
-func run(bundle, image, name string) {
+type RunOptions struct {
+	Bundle string
+	Image  string
+	Name   string
+	Memory string
+	CPUs   float64
+}
 
+func run(opts RunOptions) {
+	bundle := opts.Bundle
 	spec := loadSpec(bundle)
 
 	imageRef := bundle
 	rootfsSrc := filepath.Join(bundle, spec.Root.Path)
-	if image != "" {
-		if filepath.Base(image) != image {
-			panic(fmt.Errorf("invalid image name %q", image))
+	if opts.Image != "" {
+		if filepath.Base(opts.Image) != opts.Image {
+			panic(fmt.Errorf("invalid image name %q", opts.Image))
 		}
-		if _, err := os.Stat(imageRootfs(image)); err != nil {
-			panic(fmt.Errorf("image %q not found: %w", image, err))
+		if _, err := os.Stat(imageRootfs(opts.Image)); err != nil {
+			panic(fmt.Errorf("image %q not found: %w", opts.Image, err))
 		}
-		imageRef = image
-		rootfsSrc = imageRootfs(image)
+		imageRef = opts.Image
+		rootfsSrc = imageRootfs(opts.Image)
 	}
 
 	c := NewContainer(imageRef, spec.Process.Args)
-	if name != "" {
-		c.ID = name
+	if opts.Name != "" {
+		c.ID = opts.Name
 	}
 	if _, err := os.Stat(containerDir(c.ID)); err == nil {
 		panic(fmt.Errorf("container %q already exists", c.ID))
@@ -186,12 +208,21 @@ func run(bundle, image, name string) {
 		panic(err)
 	}
 
+	if opts.Memory != "" || opts.CPUs > 0 {
+		if err := SetupCgroup(c.ID, c.PID, opts.Memory, opts.CPUs); err != nil {
+			panic(err)
+		}
+	}
+
 	waitErr := cmd.Wait()
 	c.StopContainer()
 	if cmd.ProcessState != nil {
 		c.ExitCode = cmd.ProcessState.ExitCode()
 	}
 	if err := writeNewContainerOnDisk(c); err != nil {
+		panic(err)
+	}
+	if err := CleanupCgroup(c.ID); err != nil {
 		panic(err)
 	}
 	if waitErr != nil {
