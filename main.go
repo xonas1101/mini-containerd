@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -133,6 +134,24 @@ func main() {
 							img.Name, id, formatSize(img.SizeBytes), img.Created.Format(time.RFC3339))
 					}
 					return nil
+				},
+			},
+			{
+				Name:      "logs",
+				Usage:     "show a container's captured stdout/stderr",
+				ArgsUsage: "<container>",
+				Flags: []cli.Flag{
+					&cli.IntFlag{
+						Name:  "tail",
+						Usage: "only show the last N lines",
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					id := cmd.Args().First()
+					if id == "" {
+						return fmt.Errorf("container name required")
+					}
+					return ShowLogs(id, int(cmd.Int("tail")))
 				},
 			},
 		},
@@ -287,6 +306,14 @@ func child() {
 		panic(err)
 	}
 
+	// Open the log file while the host path is still resolvable (pre-pivot).
+	// The fd stays valid across pivot_root since it isn't path-based.
+	logFile, err := os.OpenFile(filepath.Join(containerDir(containerID), "logs.txt"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		panic(err)
+	}
+	defer logFile.Close()
+
 	// If OCI root is readonly, remount rootfs as read-only
 	if spec.Root.Readonly {
 		if err := syscall.Mount(
@@ -334,7 +361,9 @@ func child() {
 	cmd := exec.Command(proc.Args[0], proc.Args[1:]...)
 	cmd.Env = proc.Env
 	cmd.Dir = proc.Cwd
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = io.MultiWriter(os.Stdout, logFile)
+	cmd.Stderr = io.MultiWriter(os.Stderr, logFile)
 
 	if err := syscall.Setgid(int(proc.User.GID)); err != nil {
 		panic(err)
