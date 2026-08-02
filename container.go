@@ -20,6 +20,7 @@ type Container struct {
 	Command   []string  `json:"command"`
 	CreatedAt time.Time `json:"created_at"`
 	ExitCode  int       `json:"exit_code"`
+	Volumes   []string  `json:"volumes,omitempty"` // "host:container[:ro]" specs
 }
 
 func NewContainer(image string, command []string) *Container {
@@ -55,6 +56,18 @@ func writeNewContainerOnDisk(c *Container) error {
 	}
 	log.Printf("container %s written to disk", c.ID)
 	return nil
+}
+
+func readContainer(id string) (*Container, error) {
+	data, err := os.ReadFile(filepath.Join(containerDir(id), "config.json"))
+	if err != nil {
+		return nil, err
+	}
+	var c Container
+	if err := json.Unmarshal(data, &c); err != nil {
+		return nil, err
+	}
+	return &c, nil
 }
 
 func (c *Container) StartContainer() {

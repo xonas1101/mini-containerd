@@ -70,6 +70,10 @@ func main() {
 						Name:  "cpus",
 						Usage: "cpu limit in cores, e.g. 0.5 (cgroup v2 cpu.max)",
 					},
+					&cli.StringSliceFlag{
+						Name:  "volume",
+						Usage: "bind mount host:container[:ro], repeatable",
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					bundle := cmd.Args().First()
@@ -81,11 +85,12 @@ func main() {
 						return nil
 					}
 					run(RunOptions{
-						Bundle: bundle,
-						Image:  cmd.String("image"),
-						Name:   cmd.String("name"),
-						Memory: cmd.String("memory"),
-						CPUs:   cmd.Float("cpus"),
+						Bundle:  bundle,
+						Image:   cmd.String("image"),
+						Name:    cmd.String("name"),
+						Memory:  cmd.String("memory"),
+						CPUs:    cmd.Float("cpus"),
+						Volumes: cmd.StringSlice("volume"),
 					})
 					return nil
 				},
@@ -140,11 +145,12 @@ func main() {
 }
 
 type RunOptions struct {
-	Bundle string
-	Image  string
-	Name   string
-	Memory string
-	CPUs   float64
+	Bundle  string
+	Image   string
+	Name    string
+	Memory  string
+	CPUs    float64
+	Volumes []string
 }
 
 func run(opts RunOptions) {
@@ -164,7 +170,14 @@ func run(opts RunOptions) {
 		rootfsSrc = imageRootfs(opts.Image)
 	}
 
+	for _, v := range opts.Volumes {
+		if _, _, _, err := parseVolume(v); err != nil {
+			panic(err)
+		}
+	}
+
 	c := NewContainer(imageRef, spec.Process.Args)
+	c.Volumes = opts.Volumes
 	if opts.Name != "" {
 		c.ID = opts.Name
 	}
@@ -265,6 +278,15 @@ func child() {
 
 	// Root filesystem: the per-container copy made by run(), not the bundle's own rootfs
 	rootfs := filepath.Join(containerDir(containerID), "rootfs")
+
+	container, err := readContainer(containerID)
+	if err != nil {
+		panic(err)
+	}
+	if err := mountVolumes(rootfs, container.Volumes); err != nil {
+		panic(err)
+	}
+
 	// If OCI root is readonly, remount rootfs as read-only
 	if spec.Root.Readonly {
 		if err := syscall.Mount(
