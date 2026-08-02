@@ -462,10 +462,10 @@ func child() error {
 	if err := mountAll(spec); err != nil {
 		return err
 	}
-	if err := setupNetwork(); err != nil {
+	if err := setupDevices(); err != nil {
 		return err
 	}
-	if err := setupDevices(); err != nil {
+	if err := setupNetwork(); err != nil {
 		return err
 	}
 	_ = os.Remove("/dev/ptmx")
