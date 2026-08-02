@@ -245,6 +245,38 @@ func main() {
 					return nil
 				},
 			},
+			{
+				Name:      "rm",
+				Usage:     "remove a stopped/exited container's state",
+				ArgsUsage: "<container>",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{
+						Name:  "force",
+						Usage: "kill the container first if it's still running",
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					id := cmd.Args().First()
+					if id == "" {
+						return fmt.Errorf("container name required")
+					}
+					return RemoveContainer(id, cmd.Bool("force"))
+				},
+			},
+			{
+				Name:  "prune",
+				Usage: "remove every container that isn't currently running",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					removed, err := PruneContainers()
+					if err != nil {
+						return err
+					}
+					for _, id := range removed {
+						fmt.Println(id)
+					}
+					return nil
+				},
+			},
 		},
 	}
 

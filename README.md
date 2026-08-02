@@ -32,6 +32,8 @@ mini-containerd run [options] <bundle> [command] [args...]   run a container fro
 mini-containerd load, import <name>          load an image from a tar/tar.gz rootfs bundle
 mini-containerd images                       list loaded images
 mini-containerd ps                           list containers
+mini-containerd rm <container> [--force]     remove a stopped/exited container's state
+mini-containerd prune                        remove every container that isn't currently running
 mini-containerd logs <container>             show a container's captured stdout/stderr
 mini-containerd start <container>            restart a stopped container
 mini-containerd stop <container>             gracefully stop a running container

@@ -89,3 +89,46 @@ func KillContainer(id string) error {
 	}
 	return CleanupCgroup(id)
 }
+
+// RemoveContainer deletes a container's persisted state (config.json, its
+// rootfs copy, logs.txt). Refuses on a running container unless force is
+// set, in which case it's killed first.
+func RemoveContainer(id string, force bool) error {
+	c, err := readContainer(id)
+	if err != nil {
+		return fmt.Errorf("container %q not found: %w", id, err)
+	}
+	if c.Status == "running" {
+		if !force {
+			return fmt.Errorf("container %q is running (use --force to kill and remove)", id)
+		}
+		if err := KillContainer(id); err != nil {
+			return err
+		}
+	}
+	if err := CleanupCgroup(id); err != nil {
+		return err
+	}
+	return os.RemoveAll(containerDir(id))
+}
+
+// PruneContainers removes every container that isn't currently running,
+// returning the ids it removed.
+func PruneContainers() ([]string, error) {
+	containers, err := ListContainers()
+	if err != nil {
+		return nil, err
+	}
+
+	var removed []string
+	for _, c := range containers {
+		if c.Status == "running" {
+			continue
+		}
+		if err := RemoveContainer(c.ID, false); err != nil {
+			return removed, fmt.Errorf("remove container %q: %w", c.ID, err)
+		}
+		removed = append(removed, c.ID)
+	}
+	return removed, nil
+}
