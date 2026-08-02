@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/thanhpk/randstr"
@@ -63,7 +65,47 @@ func writeNewContainerOnDisk(c *Container) error {
 	return nil
 }
 
-func readContainer(id string) (*Container, error) {
+// resolveContainerID accepts a full ID or an unambiguous prefix of one
+// (like Docker's short IDs) and returns the full ID. Scans containersRoot
+// directly rather than going through ListContainers/readContainer, since
+// readContainer calls this and that would recurse.
+func resolveContainerID(idOrPrefix string) (string, error) {
+	if idOrPrefix == "" {
+		return "", fmt.Errorf("container name required")
+	}
+	if _, err := os.Stat(filepath.Join(containerDir(idOrPrefix), "config.json")); err == nil {
+		return idOrPrefix, nil
+	}
+
+	entries, err := os.ReadDir(containersRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("container %q not found", idOrPrefix)
+		}
+		return "", err
+	}
+
+	var matches []string
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), idOrPrefix) {
+			matches = append(matches, e.Name())
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("container %q not found", idOrPrefix)
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("container ID %q is ambiguous, matches: %s", idOrPrefix, strings.Join(matches, ", "))
+	}
+}
+
+func readContainer(idOrPrefix string) (*Container, error) {
+	id, err := resolveContainerID(idOrPrefix)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(filepath.Join(containerDir(id), "config.json"))
 	if err != nil {
 		return nil, err
