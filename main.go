@@ -68,6 +68,7 @@ func main() {
 			},
 			{
 				Name:      "load",
+				Aliases:   []string{"import"},
 				Usage:     "load an image from a tar/tar.gz rootfs bundle",
 				ArgsUsage: "<name>",
 				Flags: []cli.Flag{

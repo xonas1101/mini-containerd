@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -54,22 +55,30 @@ func readImageManifest(name string) (*Image, error) {
 
 // LoadImage extracts a .tar or .tar.gz rootfs bundle into imagesRoot/<name>/rootfs
 // and writes a manifest.json describing it.
-func LoadImage(name, tarPath string) error {
-	if _, err := os.Stat(imageDir(name)); err == nil {
+func LoadImage(name, tarPath string) (err error) {
+	if filepath.Base(name) != name || name == "." || name == ".." {
+		return fmt.Errorf("invalid image name %q", name)
+	}
+	if _, statErr := os.Stat(imageDir(name)); statErr == nil {
 		return fmt.Errorf("image %q already exists", name)
 	}
 
 	rootfs := imageRootfs(name)
-	if err := os.MkdirAll(rootfs, 0755); err != nil {
+	if err = os.MkdirAll(rootfs, 0755); err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(imageDir(name))
+		}
+	}()
 
 	id, err := sha256File(tarPath)
 	if err != nil {
 		return err
 	}
 
-	if err := extractTar(tarPath, rootfs); err != nil {
+	if err = extractTar(tarPath, rootfs); err != nil {
 		return err
 	}
 
@@ -85,7 +94,7 @@ func LoadImage(name, tarPath string) error {
 		Created:   time.Now(),
 		Rootfs:    rootfs,
 	}
-	if err := writeImageManifest(img); err != nil {
+	if err = writeImageManifest(img); err != nil {
 		return err
 	}
 	log.Printf("image %s loaded (%s, %d bytes)", name, img.ID, size)
@@ -109,6 +118,7 @@ func ListImages() ([]*Image, error) {
 		}
 		img, err := readImageManifest(e.Name())
 		if err != nil {
+			log.Printf("skipping image %s: %v", e.Name(), err)
 			continue
 		}
 		images = append(images, img)
@@ -185,7 +195,13 @@ func extractTar(src, dst string) error {
 			return err
 		}
 
-		target := filepath.Join(dst, hdr.Name)
+		target, err := safeJoin(dst, hdr.Name)
+		if err != nil {
+			return err
+		}
+		if err := rejectSymlinkAncestors(dst, filepath.Dir(target)); err != nil {
+			return err
+		}
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
@@ -215,4 +231,45 @@ func extractTar(src, dst string) error {
 			}
 		}
 	}
+}
+
+// safeJoin resolves a tar entry name against dst, rejecting absolute paths
+// and ".." components that would escape dst (tar path traversal / "zip slip").
+func safeJoin(dst, name string) (string, error) {
+	clean := filepath.Clean(name)
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("invalid tar entry path %q", name)
+	}
+	return filepath.Join(dst, clean), nil
+}
+
+// rejectSymlinkAncestors walks dir's path components (relative to base) and
+// refuses extraction if any existing ancestor is a symlink. Without this, a
+// tar can plant a symlink (e.g. "etc" -> "/etc") and a later entry writing
+// through it (e.g. "etc/passwd") would silently escape dst via normal path
+// resolution, since Go/the kernel always follow symlinks in intermediate
+// path components.
+func rejectSymlinkAncestors(base, dir string) error {
+	rel, err := filepath.Rel(base, dir)
+	if err != nil {
+		return err
+	}
+	if rel == "." {
+		return nil
+	}
+	cur := base
+	for _, part := range strings.Split(rel, string(os.PathSeparator)) {
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to extract through symlink at %s", cur)
+		}
+	}
+	return nil
 }
