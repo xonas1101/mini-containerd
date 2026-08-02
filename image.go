@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const imagesRoot = "/var/lib/mini-containerd/images"
+var imagesRoot = "/var/lib/mini-containerd/images"
 
 type Image struct {
 	Name      string    `json:"name"`
