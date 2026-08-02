@@ -25,6 +25,7 @@ type Container struct {
 	CreatedAt time.Time `json:"created_at"`
 	ExitCode  int       `json:"exit_code"`
 	Volumes   []string  `json:"volumes,omitempty"` // "host:container[:ro]" specs
+	Detach    bool      `json:"detach"`
 }
 
 func NewContainer(image string, command []string) *Container {

@@ -15,7 +15,7 @@ This is not meant to be production-ready. It’s a learning project focused on e
   rootfs copy so containers never share or contaminate each other's filesystem
 - cgroup v2 memory/CPU limits (`--memory`, `--cpus`)
 - Volume bind mounts (`--volume host:container[:ro]`)
-- stdout/stderr capture to a per-container log file
+- stdout/stderr capture to a per-container log file for `--detach` runs
 - Full lifecycle management: `run` (foreground or `--detach`), `start`,
   `stop` (SIGTERM then SIGKILL after a timeout), `kill`
 - `exec` into a running container's existing namespaces
@@ -77,6 +77,41 @@ Only container processes are visible, which confirms PID namespace isolation. Ru
 
 ---
 
+## Using other images, not just BusyBox
+
+`load`/`import` accept **any** `.tar`/`.tar.gz` of a Linux rootfs — BusyBox
+isn't special, it's just the one bundled for convenience. To run something
+like a Node.js app the same way you'd expect from Docker:
+
+1. **Get a rootfs tarball.** The easiest source is exporting an existing
+   Docker image's filesystem (Docker itself isn't used at runtime, just to
+   produce the input file):
+   ```bash
+   docker export $(docker create node:20-slim) -o node.tar.gz
+   ```
+   This matters because BusyBox is a single **statically linked** binary —
+   it carries no shared library dependencies, so a bare `bin/busybox` plus a
+   few symlinks is a complete rootfs. A real app like Node is dynamically
+   linked against glibc and a bunch of `.so` files; `docker export` captures
+   the *entire* filesystem (libs included), so the resulting tarball is
+   self-contained the same way BusyBox's is.
+
+2. **Load it:**
+   ```bash
+   sudo ./mini-containerd load --file=node.tar.gz node
+   sudo ./mini-containerd run --image=node --name=myapp bundle
+   ```
+
+**Current limitation:** the command actually executed inside the container
+(`process.args` in `bundle/config.json`) is fixed — right now it's hardcoded
+to `/bin/sh`. There's no `--entrypoint`/trailing-command CLI flag yet (the
+way `docker run node:20 node server.js` lets you override the command), so
+to run something other than a shell today you'd edit `config.json`'s
+`process.args` directly. Command override is worth its own issue if you want
+that Docker-like ergonomics.
+
+---
+
 ## Project Structure
 
 ```
@@ -106,7 +141,10 @@ The runtime follows a simplified version of how tools like containerd/runc opera
 4. Set up the root filesystem using `pivot_root` into the per-container copy
 5. Mount required filesystems (`/proc`, `/dev/pts`, volumes, etc.) and bring up loopback networking
 6. Apply cgroup v2 limits, if requested
-7. Execute the container process, capturing its output to a log file
+7. Execute the container process — a foreground run gets the real terminal
+   passed straight through (shell prompt, colors, etc. all work); a
+   `--detach` run has no terminal to preserve, so its output goes to a log
+   file instead (see `logs`)
 
 The parent process acts as a launcher, while the child process becomes PID 1 inside the container. `exec`, `stop`, `kill`, and `start` all act on a container by reading its persisted state (`config.json`) rather than needing the original launching process still around.
 
@@ -171,6 +209,11 @@ This is still a work in progress. Some known limitations:
   limits, since they aren't persisted on the container yet
 - `logs --follow` (real-time streaming) isn't implemented
 - No image layering — a loaded image is always a single flat layer
+- `logs` only has output for `--detach` runs; foreground runs pass the real
+  terminal straight through instead (see #40) — a real pty would let both
+  work together, not implemented yet
+- No `--entrypoint`/command-override flag — the executed command comes from
+  `bundle/config.json`'s `process.args`, not from the CLI
 
 ---
 

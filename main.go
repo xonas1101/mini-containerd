@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -156,7 +155,7 @@ func main() {
 			},
 			{
 				Name:      "logs",
-				Usage:     "show a container's captured stdout/stderr",
+				Usage:     "show a --detach container's captured stdout/stderr (foreground runs aren't captured, see #40)",
 				ArgsUsage: "<container>",
 				Flags: []cli.Flag{
 					&cli.IntFlag{
@@ -347,6 +346,7 @@ func launchChild(c *Container, bundle string, spec *specs.Spec, memory string, c
 	}
 
 	c.PID = cmd.Process.Pid
+	c.Detach = detach
 	c.markRunning()
 	if err := writeNewContainerOnDisk(c); err != nil {
 		return err
@@ -478,9 +478,23 @@ func child() error {
 	cmd := exec.Command(proc.Args[0], proc.Args[1:]...)
 	cmd.Env = proc.Env
 	cmd.Dir = proc.Cwd
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = io.MultiWriter(os.Stdout, logFile)
-	cmd.Stderr = io.MultiWriter(os.Stderr, logFile)
+	if container.Detach {
+		// No one is watching a detached container's terminal live, so there's
+		// no tty to preserve — just capture to the log file.
+		cmd.Stdin = nil
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+	} else {
+		// Pass the real fds straight through so the child gets a genuine
+		// tty (shell prompt, colors, column output all depend on this).
+		// Wrapping these in an io.MultiWriter to also tee to the log file
+		// would force os/exec to fall back to a pipe, breaking isatty()
+		// for the child — see #40. No log capture for foreground runs as
+		// a result; a real pty would be needed to have both.
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 
 	if err := syscall.Setgid(int(proc.User.GID)); err != nil {
 		return err
