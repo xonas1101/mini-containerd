@@ -19,7 +19,10 @@ func StartContainer(id string) error {
 	if c.Status == "running" {
 		return fmt.Errorf("container %q is already running", id)
 	}
-	spec := loadSpec(c.Bundle)
+	spec, err := loadSpec(c.Bundle)
+	if err != nil {
+		return err
+	}
 	return launchChild(c, c.Bundle, spec, "", 0, true)
 }
 

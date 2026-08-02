@@ -26,29 +26,41 @@ import (
 	cp "github.com/otiai10/copy"
 )
 
-func loadSpec(bundle string) *specs.Spec {
+func loadSpec(bundle string) (*specs.Spec, error) {
 	data, err := os.ReadFile(filepath.Join(bundle, "config.json"))
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("read bundle config: %w", err)
 	}
 
 	var spec specs.Spec
 	if err := json.Unmarshal(data, &spec); err != nil {
-		panic(err)
+		return nil, fmt.Errorf("parse bundle config: %w", err)
 	}
-	return &spec
+	return &spec, nil
 }
+
+var debugMode bool
 
 func main() {
 	// child is an internal subcommand spawned by run() via /proc/self/exe — not user-facing
 	if len(os.Args) > 1 && os.Args[1] == "child" {
-		child()
+		if err := child(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		return
 	}
 
 	app := &cli.Command{
 		Name:  "mini-containerd",
 		Usage: "a minimal container runtime",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:        "debug",
+				Usage:       "show full error detail instead of a friendly message",
+				Destination: &debugMode,
+			},
+		},
 		Commands: []*cli.Command{
 			{
 				Name:      "run",
@@ -85,11 +97,13 @@ func main() {
 					if bundle == "" {
 						return fmt.Errorf("bundle path required")
 					}
-					if needDelegate() {
-						reexecInDelegate(20)
-						return nil
+					if cmd.IsSet("name") && cmd.String("name") == "" {
+						return fmt.Errorf("container name cannot be empty")
 					}
-					run(RunOptions{
+					if needDelegate() {
+						return reexecInDelegate(20)
+					}
+					return run(RunOptions{
 						Bundle:  bundle,
 						Image:   cmd.String("image"),
 						Name:    cmd.String("name"),
@@ -98,7 +112,6 @@ func main() {
 						CPUs:    cmd.Float("cpus"),
 						Volumes: cmd.StringSlice("volume"),
 					})
-					return nil
 				},
 			},
 			{
@@ -217,6 +230,16 @@ func main() {
 		},
 	}
 
+	defer func() {
+		if r := recover(); r != nil {
+			if debugMode {
+				panic(r)
+			}
+			fmt.Fprintf(os.Stderr, "error: %v\n", r)
+			os.Exit(1)
+		}
+	}()
+
 	if err := app.Run(context.Background(), os.Args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -233,18 +256,21 @@ type RunOptions struct {
 	Detach  bool
 }
 
-func run(opts RunOptions) {
+func run(opts RunOptions) error {
 	bundle := opts.Bundle
-	spec := loadSpec(bundle)
+	spec, err := loadSpec(bundle)
+	if err != nil {
+		return err
+	}
 
 	imageRef := bundle
 	rootfsSrc := filepath.Join(bundle, spec.Root.Path)
 	if opts.Image != "" {
 		if filepath.Base(opts.Image) != opts.Image {
-			panic(fmt.Errorf("invalid image name %q", opts.Image))
+			return fmt.Errorf("invalid image name %q", opts.Image)
 		}
 		if _, err := os.Stat(imageRootfs(opts.Image)); err != nil {
-			panic(fmt.Errorf("image %q not found: %w", opts.Image, err))
+			return fmt.Errorf("image %q not found: %w", opts.Image, err)
 		}
 		imageRef = opts.Image
 		rootfsSrc = imageRootfs(opts.Image)
@@ -252,7 +278,7 @@ func run(opts RunOptions) {
 
 	for _, v := range opts.Volumes {
 		if _, _, _, err := parseVolume(v); err != nil {
-			panic(err)
+			return err
 		}
 	}
 
@@ -263,25 +289,23 @@ func run(opts RunOptions) {
 		c.ID = opts.Name
 	}
 	if _, err := os.Stat(containerDir(c.ID)); err == nil {
-		panic(fmt.Errorf("container %q already exists", c.ID))
+		return fmt.Errorf("container %q already exists", c.ID)
 	} else if !os.IsNotExist(err) {
-		panic(err)
+		return err
 	}
 	if err := writeNewContainerOnDisk(c); err != nil {
-		panic(err)
+		return err
 	}
 
 	rootfsDst := filepath.Join(containerDir(c.ID), "rootfs")
 	if err := os.MkdirAll(rootfsDst, 0755); err != nil {
-		panic(err)
+		return err
 	}
 	if err := cp.Copy(rootfsSrc, rootfsDst); err != nil {
-		panic(err)
+		return err
 	}
 
-	if err := launchChild(c, bundle, spec, opts.Memory, opts.CPUs, opts.Detach); err != nil {
-		panic(err)
-	}
+	return launchChild(c, bundle, spec, opts.Memory, opts.CPUs, opts.Detach)
 }
 
 // launchChild spawns the "/proc/self/exe child" process for c, applies
@@ -353,19 +377,22 @@ func namespaceFlags(spec *specs.Spec) uintptr {
 	return flags
 }
 
-func child() {
+func child() error {
 	if len(os.Args) < 4 {
-		panic("child requires bundle path and container id")
+		return fmt.Errorf("child requires bundle path and container id")
 	}
 
 	bundle := os.Args[2]
 	containerID := os.Args[3]
-	spec := loadSpec(bundle)
+	spec, err := loadSpec(bundle)
+	if err != nil {
+		return err
+	}
 
 	// Hostname (OCI)
 	if spec.Hostname != "" {
 		if err := syscall.Sethostname([]byte(spec.Hostname)); err != nil {
-			panic(err)
+			return err
 		}
 	}
 
@@ -374,17 +401,17 @@ func child() {
 
 	container, err := readContainer(containerID)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	if err := mountVolumes(rootfs, container.Volumes); err != nil {
-		panic(err)
+		return err
 	}
 
 	// Open the log file while the host path is still resolvable (pre-pivot).
 	// The fd stays valid across pivot_root since it isn't path-based.
 	logFile, err := os.OpenFile(filepath.Join(containerDir(containerID), "logs.txt"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	defer logFile.Close()
 
@@ -397,7 +424,7 @@ func child() {
 			syscall.MS_BIND|syscall.MS_REC,
 			"",
 		); err != nil {
-			panic(err)
+			return err
 		}
 
 		if err := syscall.Mount(
@@ -407,27 +434,27 @@ func child() {
 			syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_RDONLY,
 			"",
 		); err != nil {
-			panic(err)
+			return err
 		}
 	}
 	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
-		panic(err)
+		return err
 	}
 	if err := pivotRoot(rootfs); err != nil {
-		panic(err)
+		return err
 	}
 	if err := mountAll(spec); err != nil {
-		panic(err)
+		return err
 	}
 	if err := setupNetwork(); err != nil {
-		panic(err)
+		return err
 	}
 	if err := setupDevices(); err != nil {
-		panic(err)
+		return err
 	}
 	_ = os.Remove("/dev/ptmx")
 	if err := os.Symlink("pts/ptmx", "/dev/ptmx"); err != nil {
-		panic(err)
+		return err
 	}
 
 	// OCI process
@@ -440,11 +467,11 @@ func child() {
 	cmd.Stderr = io.MultiWriter(os.Stderr, logFile)
 
 	if err := syscall.Setgid(int(proc.User.GID)); err != nil {
-		panic(err)
+		return err
 	}
 
 	if err := syscall.Setuid(int(proc.User.UID)); err != nil {
-		panic(err)
+		return err
 	}
 
 	// PID 1 reaping
@@ -458,10 +485,8 @@ func child() {
 			}
 		}
 	}()
-	
-	if err := cmd.Run(); err != nil {
-		panic(err)
-	}
+
+	return cmd.Run()
 }
 
 func pivotRoot(rootfs string) error {
@@ -616,10 +641,10 @@ func needDelegate() bool {
 
 // reexecInDelegate re-launches this program using systemd-run
 // with cgroup delegation enabled.
-func reexecInDelegate(pidsMax int) {
+func reexecInDelegate(pidsMax int) error {
 	selfExe, err := os.Executable()
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	// systemd-run arguments:
@@ -653,9 +678,10 @@ func reexecInDelegate(pidsMax int) {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		panic(err)
+		return err
 	}
 
 	// Exit original process — new delegated one continues
 	os.Exit(0)
+	return nil
 }
