@@ -130,23 +130,29 @@ func run(bundle, image, name string) {
 	spec := loadSpec(bundle)
 
 	imageRef := bundle
+	rootfsSrc := filepath.Join(bundle, spec.Root.Path)
 	if image != "" {
+		if filepath.Base(image) != image {
+			panic(fmt.Errorf("invalid image name %q", image))
+		}
+		if _, err := os.Stat(imageRootfs(image)); err != nil {
+			panic(fmt.Errorf("image %q not found: %w", image, err))
+		}
 		imageRef = image
+		rootfsSrc = imageRootfs(image)
 	}
+
 	c := NewContainer(imageRef, spec.Process.Args)
 	if name != "" {
 		c.ID = name
 	}
 	if _, err := os.Stat(containerDir(c.ID)); err == nil {
 		panic(fmt.Errorf("container %q already exists", c.ID))
+	} else if !os.IsNotExist(err) {
+		panic(err)
 	}
 	if err := writeNewContainerOnDisk(c); err != nil {
 		panic(err)
-	}
-
-	rootfsSrc := filepath.Join(bundle, spec.Root.Path)
-	if image != "" {
-		rootfsSrc = imageRootfs(image)
 	}
 
 	rootfsDst := filepath.Join(containerDir(c.ID), "rootfs")
