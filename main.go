@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/urfave/cli/v3"
@@ -62,6 +63,46 @@ func main() {
 						return nil
 					}
 					run(bundle)
+					return nil
+				},
+			},
+			{
+				Name:      "load",
+				Aliases:   []string{"import"},
+				Usage:     "load an image from a tar/tar.gz rootfs bundle",
+				ArgsUsage: "<name>",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "file",
+						Usage:    "path to the .tar or .tar.gz bundle",
+						Required: true,
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					name := cmd.Args().First()
+					if name == "" {
+						return fmt.Errorf("image name required")
+					}
+					return LoadImage(name, cmd.String("file"))
+				},
+			},
+			{
+				Name:  "images",
+				Usage: "list loaded images",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					images, err := ListImages()
+					if err != nil {
+						return err
+					}
+					fmt.Printf("%-16s %-20s %-10s %s\n", "NAME", "IMAGE ID", "SIZE", "CREATED")
+					for _, img := range images {
+						id := img.ID
+						if len(id) > 19 {
+							id = id[:19]
+						}
+						fmt.Printf("%-16s %-20s %-10s %s\n",
+							img.Name, id, formatSize(img.SizeBytes), img.Created.Format(time.RFC3339))
+					}
 					return nil
 				},
 			},
