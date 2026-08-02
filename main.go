@@ -202,6 +202,18 @@ func main() {
 					return KillContainer(id)
 				},
 			},
+			{
+				Name:      "exec",
+				Usage:     "run a command inside a running container's namespaces",
+				ArgsUsage: "<container> <command> [args...]",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					args := cmd.Args().Slice()
+					if len(args) < 2 {
+						return fmt.Errorf("usage: exec <container> <command> [args...]")
+					}
+					return ExecInContainer(args[0], args[1:])
+				},
+			},
 		},
 	}
 
