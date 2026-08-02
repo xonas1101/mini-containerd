@@ -53,6 +53,16 @@ func main() {
 				Name:      "run",
 				Usage:     "run a container from a bundle",
 				ArgsUsage: "<bundle>",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "image",
+						Usage: "name of a loaded image to use as rootfs (see `load`/`images`)",
+					},
+					&cli.StringFlag{
+						Name:  "name",
+						Usage: "container name (defaults to a random id)",
+					},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					bundle := cmd.Args().First()
 					if bundle == "" {
@@ -62,7 +72,7 @@ func main() {
 						reexecInDelegate(20)
 						return nil
 					}
-					run(bundle)
+					run(bundle, cmd.String("image"), cmd.String("name"))
 					return nil
 				},
 			},
@@ -115,11 +125,32 @@ func main() {
 	}
 }
 
-func run(bundle string) {
+func run(bundle, image, name string) {
 
 	spec := loadSpec(bundle)
-	
-	c := NewContainer(bundle, spec.Process.Args)
+
+	imageRef := bundle
+	rootfsSrc := filepath.Join(bundle, spec.Root.Path)
+	if image != "" {
+		if filepath.Base(image) != image {
+			panic(fmt.Errorf("invalid image name %q", image))
+		}
+		if _, err := os.Stat(imageRootfs(image)); err != nil {
+			panic(fmt.Errorf("image %q not found: %w", image, err))
+		}
+		imageRef = image
+		rootfsSrc = imageRootfs(image)
+	}
+
+	c := NewContainer(imageRef, spec.Process.Args)
+	if name != "" {
+		c.ID = name
+	}
+	if _, err := os.Stat(containerDir(c.ID)); err == nil {
+		panic(fmt.Errorf("container %q already exists", c.ID))
+	} else if !os.IsNotExist(err) {
+		panic(err)
+	}
 	if err := writeNewContainerOnDisk(c); err != nil {
 		panic(err)
 	}
@@ -128,7 +159,7 @@ func run(bundle string) {
 	if err := os.MkdirAll(rootfsDst, 0755); err != nil {
 		panic(err)
 	}
-	if err := cp.Copy(filepath.Join(bundle, spec.Root.Path), rootfsDst); err != nil {
+	if err := cp.Copy(rootfsSrc, rootfsDst); err != nil {
 		panic(err)
 	}
 
@@ -136,6 +167,7 @@ func run(bundle string) {
 		"/proc/self/exe",
 		"child",
 		bundle,
+		c.ID,
 	)
 
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -183,11 +215,12 @@ func namespaceFlags(spec *specs.Spec) uintptr {
 }
 
 func child() {
-	if len(os.Args) < 3 {
-		panic("child requires bundle path")
+	if len(os.Args) < 4 {
+		panic("child requires bundle path and container id")
 	}
 
 	bundle := os.Args[2]
+	containerID := os.Args[3]
 	spec := loadSpec(bundle)
 
 	// Hostname (OCI)
@@ -197,8 +230,8 @@ func child() {
 		}
 	}
 
-	// Root filesystem (bundle-relative)
-	rootfs := filepath.Join(bundle, spec.Root.Path)
+	// Root filesystem: the per-container copy made by run(), not the bundle's own rootfs
+	rootfs := filepath.Join(containerDir(containerID), "rootfs")
 	// If OCI root is readonly, remount rootfs as read-only
 	if spec.Root.Readonly {
 		if err := syscall.Mount(
