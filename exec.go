@@ -27,13 +27,13 @@ var nsJoinOrder = []string{"pid", "uts", "ipc", "net", "mnt"}
 // forked child inherits them. runc instead re-execs through a C constructor
 // (nsenter) that runs before the Go runtime starts any other threads, which
 // is more robust but out of scope for this project.
-func ExecInContainer(id string, args []string) error {
-	c, err := readContainer(id)
+func ExecInContainer(idOrPrefix string, args []string) error {
+	c, err := readContainer(idOrPrefix)
 	if err != nil {
-		return fmt.Errorf("container %q not found: %w", id, err)
+		return fmt.Errorf("container %q not found: %w", idOrPrefix, err)
 	}
 	if c.Status != "running" {
-		return fmt.Errorf("container %q is not running", id)
+		return fmt.Errorf("container %q is not running", c.ID)
 	}
 	if len(args) == 0 {
 		return fmt.Errorf("command required")

@@ -9,7 +9,11 @@ import (
 
 // ShowLogs prints a container's captured stdout/stderr. If tail > 0, only
 // the last tail lines are printed.
-func ShowLogs(id string, tail int) error {
+func ShowLogs(idOrPrefix string, tail int) error {
+	id, err := resolveContainerID(idOrPrefix)
+	if err != nil {
+		return err
+	}
 	path := filepath.Join(containerDir(id), "logs.txt")
 	f, err := os.Open(path)
 	if err != nil {

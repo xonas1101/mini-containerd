@@ -2,9 +2,90 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+// deadPID starts and waits for a trivial child process, returning its pid
+// after it has exited — guaranteed not to be a live process (barring an
+// extremely unlikely pid-reuse race), for testing stale-PID handling.
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("running a throwaway process: %v", err)
+	}
+	return cmd.Process.Pid
+}
+
+func TestStopContainerHandlesAlreadyDeadProcess(t *testing.T) {
+	old := containersRoot
+	containersRoot = t.TempDir()
+	defer func() { containersRoot = old }()
+
+	c := NewContainer("busybox", []string{"/bin/sh"})
+	c.Status = "running"
+	c.PID = deadPID(t)
+	if err := writeNewContainerOnDisk(c); err != nil {
+		t.Fatalf("writeNewContainerOnDisk: %v", err)
+	}
+
+	if err := StopContainer(c.ID, time.Second); err != nil {
+		t.Fatalf("StopContainer on an already-dead process should not error, got: %v", err)
+	}
+
+	got, err := readContainer(c.ID)
+	if err != nil {
+		t.Fatalf("readContainer: %v", err)
+	}
+	if got.Status != "stopped" {
+		t.Fatalf("status = %q, want %q", got.Status, "stopped")
+	}
+}
+
+func TestKillContainerHandlesAlreadyDeadProcess(t *testing.T) {
+	old := containersRoot
+	containersRoot = t.TempDir()
+	defer func() { containersRoot = old }()
+
+	c := NewContainer("busybox", []string{"/bin/sh"})
+	c.Status = "running"
+	c.PID = deadPID(t)
+	if err := writeNewContainerOnDisk(c); err != nil {
+		t.Fatalf("writeNewContainerOnDisk: %v", err)
+	}
+
+	if err := KillContainer(c.ID); err != nil {
+		t.Fatalf("KillContainer on an already-dead process should not error, got: %v", err)
+	}
+
+	got, err := readContainer(c.ID)
+	if err != nil {
+		t.Fatalf("readContainer: %v", err)
+	}
+	if got.Status != "stopped" {
+		t.Fatalf("status = %q, want %q", got.Status, "stopped")
+	}
+}
+
+func TestStopContainerByShortIDPrefix(t *testing.T) {
+	old := containersRoot
+	containersRoot = t.TempDir()
+	defer func() { containersRoot = old }()
+
+	c := NewContainer("busybox", []string{"/bin/sh"})
+	c.Status = "running"
+	c.PID = deadPID(t)
+	if err := writeNewContainerOnDisk(c); err != nil {
+		t.Fatalf("writeNewContainerOnDisk: %v", err)
+	}
+
+	if err := StopContainer(c.ID[:4], time.Second); err != nil {
+		t.Fatalf("StopContainer by short prefix: %v", err)
+	}
+}
 
 func TestRemoveContainerRefusesRunningWithoutForce(t *testing.T) {
 	old := containersRoot

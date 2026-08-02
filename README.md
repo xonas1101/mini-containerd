@@ -19,6 +19,10 @@ This is not meant to be production-ready. It’s a learning project focused on e
 - Full lifecycle management: `run` (foreground or `--detach`), `start`,
   `stop` (SIGTERM then SIGKILL after a timeout), `kill`
 - `exec` into a running container's existing namespaces
+- Docker-style short-ID prefixes accepted anywhere a `<container>` is expected
+  (`stop`, `kill`, `start`, `rm`, `logs`, `exec`), and `stop`/`kill` self-heal
+  a container whose process already died outside our control instead of
+  getting stuck
 - A minimal shell environment using BusyBox
 
 Running a container drops you into a shell that is isolated from the host’s process tree, filesystem, and network stack.

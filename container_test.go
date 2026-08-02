@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestNewContainerAndStateTransitions(t *testing.T) {
 	c := NewContainer("busybox", []string{"/bin/sh"})
@@ -40,6 +44,47 @@ func TestWriteAndReadContainer(t *testing.T) {
 	}
 	if got.ID != c.ID || got.Bundle != c.Bundle || len(got.Volumes) != 1 {
 		t.Fatalf("readContainer = %+v, want match for %+v", got, c)
+	}
+}
+
+func TestResolveContainerID(t *testing.T) {
+	old := containersRoot
+	containersRoot = t.TempDir()
+	defer func() { containersRoot = old }()
+
+	c := NewContainer("busybox", []string{"/bin/sh"})
+	if err := writeNewContainerOnDisk(c); err != nil {
+		t.Fatalf("writeNewContainerOnDisk: %v", err)
+	}
+
+	if got, err := resolveContainerID(c.ID); err != nil || got != c.ID {
+		t.Fatalf("resolveContainerID(full id) = (%q, %v), want (%q, nil)", got, err, c.ID)
+	}
+
+	prefix := c.ID[:4]
+	if got, err := resolveContainerID(prefix); err != nil || got != c.ID {
+		t.Fatalf("resolveContainerID(%q) = (%q, %v), want (%q, nil)", prefix, got, err, c.ID)
+	}
+
+	if _, err := resolveContainerID("doesnotexist"); err == nil {
+		t.Fatal("expected error resolving a nonexistent id")
+	}
+}
+
+func TestResolveContainerIDAmbiguous(t *testing.T) {
+	old := containersRoot
+	containersRoot = t.TempDir()
+	defer func() { containersRoot = old }()
+
+	if err := os.MkdirAll(filepath.Join(containersRoot, "abc123"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(containersRoot, "abc456"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := resolveContainerID("abc"); err == nil {
+		t.Fatal("expected error resolving an ambiguous prefix")
 	}
 }
 
