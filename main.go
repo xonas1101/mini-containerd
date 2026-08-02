@@ -468,6 +468,16 @@ func reexecInDelegate(pidsMax int) {
 	// Pass original arguments (run/child + command)
 	args = append(args, os.Args[1:]...)
 
+	// systemd-run's transient scope hits the fd soft limit on some hosts,
+	// which makes journald broadcast a "Failed to allocate manager object"
+	// error to every terminal. Raising the soft limit to the hard limit
+	// before spawning it avoids that (container still starts fine either way).
+	var rlim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlim); err == nil {
+		rlim.Cur = rlim.Max
+		_ = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rlim)
+	}
+
 	cmd := exec.Command("systemd-run", args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 
