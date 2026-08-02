@@ -227,6 +227,22 @@ func main() {
 					return ExecInContainer(args[0], args[1:])
 				},
 			},
+			{
+				Name:  "ps",
+				Usage: "list containers",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					containers, err := ListContainers()
+					if err != nil {
+						return err
+					}
+					fmt.Printf("%-20s %-10s %-8s %-16s %s\n", "ID", "STATUS", "PID", "IMAGE", "CREATED")
+					for _, c := range containers {
+						fmt.Printf("%-20s %-10s %-8d %-16s %s\n",
+							c.ID, c.Status, c.PID, c.Image, c.CreatedAt.Format(time.RFC3339))
+					}
+					return nil
+				},
+			},
 		},
 	}
 

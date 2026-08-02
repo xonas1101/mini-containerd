@@ -74,6 +74,32 @@ func readContainer(id string) (*Container, error) {
 	return &c, nil
 }
 
+// ListContainers returns every container under containersRoot, skipping
+// (and logging) any whose config.json can't be read.
+func ListContainers() ([]*Container, error) {
+	entries, err := os.ReadDir(containersRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var containers []*Container
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		c, err := readContainer(e.Name())
+		if err != nil {
+			log.Printf("skipping container %s: %v", e.Name(), err)
+			continue
+		}
+		containers = append(containers, c)
+	}
+	return containers, nil
+}
+
 func (c *Container) markRunning() {
 	c.Status = "running"
 	log.Printf("container %s started", c.ID)
